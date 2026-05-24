@@ -6,7 +6,7 @@
   <title>路线街景</title>
   <style>
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
-    #map { position: absolute; left: -9999px; width: 1px; height: 1px; visibility: hidden; }
+
     #pano-frame {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       border: none;
@@ -23,20 +23,33 @@
     .topbar {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
       background: linear-gradient(180deg, rgba(7,193,96,0.95), rgba(7,193,96,0.85));
-      padding: 12px 16px;
+      padding: 10px 14px;
       color: #fff;
       display: flex; align-items: center; justify-content: space-between;
       font-weight: bold;
     }
     .topbar .progress {
-      flex: 1; margin: 0 12px;
+      flex: 1; margin: 0 10px;
       height: 6px; background: rgba(255,255,255,0.3); border-radius: 3px; overflow: hidden;
     }
     .topbar .progress .fill {
       height: 100%; background: #fff; border-radius: 3px;
       transition: width 0.3s;
     }
-    .topbar .count { font-size: 14px; min-width: 70px; text-align: right; }
+    .topbar .count { font-size: 13px; min-width: 60px; text-align: right; }
+
+    /* 右上角小地图 */
+    #mini-map {
+      position: fixed;
+      top: 56px; right: 12px;
+      width: 130px; height: 130px;
+      border-radius: 12px;
+      overflow: hidden;
+      z-index: 90;
+      border: 2px solid rgba(255,255,255,0.85);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      background: #eee;
+    }
 
     /* 底部按钮 */
     .controls {
@@ -72,7 +85,6 @@
       return m ? decodeURIComponent(m[1]) : ''
     }
 
-    // points: 用 "lat1,lng1;lat2,lng2;..." 紧凑传入
     var ptsRaw = qs('points')
     var points = []
     if (ptsRaw) {
@@ -94,7 +106,6 @@
   </script>
 
   <script>
-    // 同步加载腾讯 JS API
     var p = window._params
     if (p.KEY) {
       document.write(
@@ -109,10 +120,12 @@
   <div id="tip"></div>
 
   <div class="topbar">
-    <span style="min-width:60px">街景</span>
+    <span style="min-width:50px">街景</span>
     <div class="progress"><div class="fill" id="progress-fill"></div></div>
     <span class="count" id="count-label">0 / 0</span>
   </div>
+
+  <div id="mini-map"></div>
 
   <div class="controls">
     <div class="btn" id="btn-prev" onclick="goPrev()">
@@ -123,8 +136,6 @@
     </div>
   </div>
 
-  <div id="map"></div>
-
   <script>
     var p = window._params
     var tip = document.getElementById('tip')
@@ -134,6 +145,10 @@
     var btnPrev = document.getElementById('btn-prev')
     var btnNext = document.getElementById('btn-next')
     var idx = 0
+
+    var miniMap = null
+    var miniMarker = null
+    var miniPolyline = null
 
     function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
     function hideTip() { tip.style.display = 'none' }
@@ -146,8 +161,15 @@
     }
 
     function bearingTo(i) {
-      if (i >= p.points.length - 1) return 0
-      var a = p.points[i], b = p.points[i + 1]
+      if (i >= p.points.length - 1) {
+        if (i <= 0) return 0
+        // 终点用最后一段方向
+        return bearingFromTo(p.points[i - 1], p.points[i])
+      }
+      return bearingFromTo(p.points[i], p.points[i + 1])
+    }
+
+    function bearingFromTo(a, b) {
       var toRad = function (d) { return d * Math.PI / 180 }
       var dLng = toRad(b.lng - a.lng)
       var y = Math.sin(dLng) * Math.cos(toRad(b.lat))
@@ -156,10 +178,55 @@
       return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360)
     }
 
+    function initMiniMap() {
+      var center = new qq.maps.LatLng(p.points[0].lat, p.points[0].lng)
+      miniMap = new qq.maps.Map(document.getElementById('mini-map'), {
+        center: center,
+        zoom: 15,
+        disableDefaultUI: true,
+        draggable: false,
+        zoomable: false,
+        scrollwheel: false,
+        keyboardShortcuts: false
+      })
+
+      // 路径
+      var path = p.points.map(function (pt) { return new qq.maps.LatLng(pt.lat, pt.lng) })
+      miniPolyline = new qq.maps.Polyline({
+        path: path,
+        strokeColor: new qq.maps.Color(7, 193, 96, 1),
+        strokeWeight: 4,
+        map: miniMap
+      })
+
+      // 当前位置 marker
+      miniMarker = new qq.maps.Marker({
+        position: center,
+        map: miniMap
+      })
+
+      // 适配整条路径
+      try {
+        var bounds = new qq.maps.LatLngBounds()
+        path.forEach(function (pt) { bounds.extend(pt) })
+        miniMap.fitBounds(bounds, { top: 10, bottom: 10, left: 10, right: 10 })
+      } catch (e) {}
+    }
+
+    function updateMiniMap() {
+      if (!miniMap || !miniMarker) return
+      var pt = p.points[idx]
+      var ll = new qq.maps.LatLng(pt.lat, pt.lng)
+      miniMarker.setPosition(ll)
+      // 让 marker 始终居中（注释掉，用户能看到整条路；如需跟随取消注释）
+      // miniMap.panTo(ll)
+    }
+
     function loadAt(i) {
       if (i < 0 || i >= p.points.length) return
       idx = i
       updateProgress()
+      updateMiniMap()
       showTip('街景查找中…')
       var pt = p.points[i]
       var latLng = new qq.maps.LatLng(pt.lat, pt.lng)
@@ -202,6 +269,7 @@
         showTip('未传入路径点')
         return
       }
+      initMiniMap()
       updateProgress()
       loadAt(0)
     }
