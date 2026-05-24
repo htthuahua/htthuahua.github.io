@@ -7,9 +7,9 @@
   <style>
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
 
-    #pano {
+    #pano-frame {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      background: #000;
+      border: none;
     }
 
     #tip {
@@ -38,7 +38,7 @@
     }
     .topbar .count { font-size: 13px; min-width: 60px; text-align: right; }
 
-    /* 右上角小地图 */
+    /* 右上角小地图（容器，可拖拽缩放） */
     #mini-wrap {
       position: fixed;
       top: 56px; right: 12px;
@@ -58,6 +58,7 @@
       overflow: hidden;
     }
 
+    /* 缩放角手柄（左下角拖动） */
     .resize-handle {
       position: absolute;
       bottom: -6px; left: -6px;
@@ -72,6 +73,7 @@
       user-select: none;
     }
 
+    /* 地图缩放按钮组 */
     .map-zoom {
       position: absolute;
       right: 4px; bottom: 4px;
@@ -104,11 +106,10 @@
       width: 0; height: 0;
       border-left: 12px solid transparent;
       border-right: 12px solid transparent;
-      border-bottom: 22px solid rgba(7,193,96,0.6);
+      border-bottom: 22px solid rgba(7,193,96,0.55);
       margin-left: -12px;
       margin-top: -22px;
       pointer-events: none;
-      transition: transform 0.15s;
     }
     .me-marker .me-dot {
       position: absolute;
@@ -186,7 +187,7 @@
   </script>
 </head>
 <body>
-  <div id="pano"></div>
+  <iframe id="pano-frame"></iframe>
   <div id="tip"></div>
 
   <div class="topbar">
@@ -216,6 +217,7 @@
   <script>
     var p = window._params
     var tip = document.getElementById('tip')
+    var frame = document.getElementById('pano-frame')
     var fill = document.getElementById('progress-fill')
     var count = document.getElementById('count-label')
     var btnPrev = document.getElementById('btn-prev')
@@ -231,8 +233,6 @@
     var miniMarker = null
     var miniPolyline = null
     var meMarkerEl = null
-    var pano = null            // qq.maps.Panorama 实例
-    var currentHeading = 0     // 当前街景视角朝向
 
     function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
     function hideTip() { tip.style.display = 'none' }
@@ -254,23 +254,18 @@
     }
     function bearingTo(i) {
       if (p.points.length < 2) return 0
-      if (i >= p.points.length - 1) return bearingFromTo(p.points[i - 1], p.points[i])
+      if (i >= p.points.length - 1) {
+        return bearingFromTo(p.points[i - 1], p.points[i])
+      }
       return bearingFromTo(p.points[i], p.points[i + 1])
     }
 
+    // 自定义 HTML 标记
     function createMeMarker() {
       var div = document.createElement('div')
       div.className = 'me-marker'
       div.innerHTML = '<div class="me-cone"></div><div class="me-dot"></div>'
       return div
-    }
-
-    function setMarkerHeading(deg) {
-      currentHeading = deg
-      if (meMarkerEl) {
-        var cone = meMarkerEl.querySelector('.me-cone')
-        if (cone) cone.style.transform = 'rotate(' + deg + 'deg)'
-      }
     }
 
     function initMiniMap() {
@@ -293,6 +288,7 @@
         map: miniMap
       })
 
+      // 用自定义 HTML 标记需要 OverlayView
       meMarkerEl = createMeMarker()
       var Overlay = function (pos) { this.pos = pos; this.div = null }
       Overlay.prototype = new qq.maps.Overlay()
@@ -317,15 +313,18 @@
         this.pos = pos
         this.draw()
       }
-      miniMarker = new Overlay(center)
-      miniMarker.setMap(miniMap)
+      var meOverlay = new Overlay(center)
+      meOverlay.setMap(miniMap)
+      miniMarker = meOverlay
 
+      // 适配整条路径
       try {
         var bounds = new qq.maps.LatLngBounds()
         path.forEach(function (pt) { bounds.extend(pt) })
         miniMap.fitBounds(bounds, { top: 12, bottom: 12, left: 12, right: 12 })
       } catch (e) {}
 
+      // 缩放按钮
       zoomInBtn.addEventListener('click', function () {
         miniMap.setZoom(miniMap.getZoom() + 1)
       })
@@ -334,35 +333,24 @@
       })
     }
 
-    function updateMiniMapPos() {
+    function updateMiniMap() {
       if (!miniMap || !miniMarker) return
       var pt = p.points[idx]
       var ll = new qq.maps.LatLng(pt.lat, pt.lng)
       miniMarker.setPosition(ll)
-    }
-
-    function ensurePano() {
-      if (pano) return
-      pano = new qq.maps.Panorama(document.getElementById('pano'), {
-        pov: { heading: 0, pitch: 0 },
-        zoom: 1
-      })
-      // 监听视角变化，实时同步小地图朝向
-      qq.maps.event.addListener(pano, 'pov_changed', function () {
-        try {
-          var pov = pano.getPov()
-          if (pov && typeof pov.heading === 'number') {
-            setMarkerHeading(Math.round(pov.heading))
-          }
-        } catch (e) {}
-      })
+      // 朝向：旋转 me-cone
+      var heading = bearingTo(idx)
+      if (meMarkerEl) {
+        var cone = meMarkerEl.querySelector('.me-cone')
+        if (cone) cone.style.transform = 'rotate(' + heading + 'deg)'
+      }
     }
 
     function loadAt(i) {
       if (i < 0 || i >= p.points.length) return
       idx = i
       updateProgress()
-      updateMiniMapPos()
+      updateMiniMap()
       showTip('街景查找中…')
       var pt = p.points[i]
       var latLng = new qq.maps.LatLng(pt.lat, pt.lng)
@@ -371,11 +359,12 @@
         var svid = result && (result.svid || (result.detail && result.detail.svid))
         if (svid) {
           hideTip()
-          ensurePano()
           var heading = bearingTo(i)
-          pano.setPano(svid)
-          pano.setPov({ heading: heading, pitch: 0 })
-          setMarkerHeading(heading)
+          frame.src = 'https://apis.map.qq.com/uri/v1/streetview' +
+            '?pano=' + encodeURIComponent(svid) +
+            '&heading=' + heading +
+            '&pitch=0&zoom=1' +
+            '&referer=' + encodeURIComponent(p.KEY || 'ARRoadMap')
         } else {
           showTip('该位置 ' + p.radius + 'm 范围内暂无街景')
         }
@@ -387,20 +376,22 @@
     window.goPrev = goPrev
     window.goNext = goNext
 
-    // 拖拽缩放小地图框
+    // ============ 拖拽缩放小地图框 ============
     var resizing = false
-    var startX = 0, startY = 0, startW = 0, startH = 0
+    var startX = 0, startY = 0, startW = 0, startH = 0, startRight = 0
     function getEvtXY(e) {
       if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY }
       return { x: e.clientX, y: e.clientY }
     }
     function onResizeStart(e) {
-      e.preventDefault(); e.stopPropagation()
+      e.preventDefault()
+      e.stopPropagation()
       resizing = true
       var c = getEvtXY(e)
       startX = c.x; startY = c.y
       var rect = miniWrap.getBoundingClientRect()
       startW = rect.width; startH = rect.height
+      startRight = window.innerWidth - rect.right
       document.addEventListener('mousemove', onResizeMove)
       document.addEventListener('mouseup', onResizeEnd)
       document.addEventListener('touchmove', onResizeMove, { passive: false })
@@ -412,10 +403,12 @@
       var c = getEvtXY(e)
       var dx = c.x - startX
       var dy = c.y - startY
+      // 左下角手柄：往左拖变大，往下拖变大
       var newW = Math.max(100, Math.min(window.innerWidth * 0.9, startW - dx))
       var newH = Math.max(100, Math.min(window.innerHeight * 0.7, startH + dy))
       miniWrap.style.width = newW + 'px'
       miniWrap.style.height = newH + 'px'
+      // 触发地图 resize
       if (miniMap && qq.maps.event) {
         qq.maps.event.trigger(miniMap, 'resize')
       }
@@ -439,8 +432,8 @@
         }
         return setTimeout(start, 100)
       }
-      if (typeof qq.maps.PanoramaService !== 'function' || typeof qq.maps.Panorama !== 'function') {
-        showTip('Panorama 不可用：当前 key 未启用 JavaScript API（v2）')
+      if (typeof qq.maps.PanoramaService !== 'function') {
+        showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2）')
         return
       }
       if (!p.points.length) {
