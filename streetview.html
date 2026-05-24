@@ -5,71 +5,78 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <title>路线街景</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-    #pano { width: 100vw; height: 100vh; background: #000; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+    #map { position: absolute; left: -9999px; width: 1px; height: 1px; visibility: hidden; }
     #tip {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       color: #fff; background: rgba(0,0,0,0.7); padding: 14px 22px;
-      border-radius: 22px; font-size: 14px; z-index: 999; display: none;
-      max-width: 80%; text-align: center;
+      border-radius: 22px; font-size: 14px; max-width: 80%; text-align: center;
     }
+    a { color: #4FC3F7; }
   </style>
 </head>
 <body>
-  <div id="pano"></div>
-  <div id="tip"></div>
+  <div id="map"></div>
+  <div id="tip">街景查找中…</div>
+
   <script>
     function qs(name) {
       var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
       return m ? decodeURIComponent(m[1]) : ''
     }
-    var KEY = qs('key')
-    var lat = parseFloat(qs('lat'))
-    var lng = parseFloat(qs('lng'))
-    var tip = document.getElementById('tip')
-    function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
-    function hideTip() { tip.style.display = 'none' }
+    var KEY     = qs('key')
+    var lat     = parseFloat(qs('lat'))
+    var lng     = parseFloat(qs('lng'))
+    var pano    = qs('pano')          // 也允许直接传 pano
+    var heading = qs('heading') || '0'
+    var pitch   = qs('pitch')   || '0'
+    var radius  = parseInt(qs('radius') || '1000', 10)
 
-    if (!KEY || isNaN(lat) || isNaN(lng)) {
-      showTip('参数缺失：key/lat/lng')
+    var tip = document.getElementById('tip')
+    function showTip(t) { tip.innerText = t }
+
+    function gotoStreetView(pano) {
+      var url = 'https://apis.map.qq.com/uri/v1/streetview' +
+        '?pano=' + encodeURIComponent(pano) +
+        '&heading=' + encodeURIComponent(heading) +
+        '&pitch=' + encodeURIComponent(pitch) +
+        '&zoom=1' +
+        '&referer=' + encodeURIComponent(KEY || 'ARRoadMap')
+      location.replace(url)
+    }
+
+    // 如果用户直接传了 pano，跳过查找
+    if (pano) {
+      showTip('正在打开街景…')
+      gotoStreetView(pano)
+    } else if (!KEY || isNaN(lat) || isNaN(lng)) {
+      showTip('参数缺失：需要 key + lat + lng，或者 pano')
     } else {
-      // 腾讯地图 JS API v2，不要加 libraries=service
       var s = document.createElement('script')
       s.src = 'https://map.qq.com/api/js?v=2.exp&key=' + encodeURIComponent(KEY)
       s.onerror = function () { showTip('地图脚本加载失败') }
       s.onload = function () {
-        if (!window.qq || !qq.maps) {
-          showTip('qq.maps 未加载（key 或 referer 配置可能有问题）')
-          return
-        }
-        if (typeof qq.maps.PanoramaService !== 'function') {
-          showTip('PanoramaService 不可用：当前 key 未启用「JavaScript API（v2）」街景能力')
+        if (!window.qq || !qq.maps || typeof qq.maps.PanoramaService !== 'function') {
+          showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2）')
           return
         }
         try {
           var latLng = new qq.maps.LatLng(lat, lng)
-          var panoService = new qq.maps.PanoramaService()
-          panoService.getPano(latLng, function (result) {
-            if (result && result.detail && result.detail.svid) {
-              renderPano(result.detail.svid)
+          var svc = new qq.maps.PanoramaService()
+          svc.getPano(latLng, radius, function (result) {
+            if (result && result.svid) {
+              gotoStreetView(result.svid)
+            } else if (result && result.detail && result.detail.svid) {
+              gotoStreetView(result.detail.svid)
             } else {
-              showTip('该位置附近暂无街景数据')
+              showTip('该位置 ' + radius + 'm 范围内暂无街景')
             }
           })
         } catch (e) {
-          showTip('街景初始化失败：' + e.message)
+          showTip('街景查找异常：' + e.message)
         }
       }
       document.body.appendChild(s)
-    }
-
-    function renderPano(svid) {
-      hideTip()
-      new qq.maps.Panorama(document.getElementById('pano'), {
-        pano: svid,
-        pov: { heading: 0, pitch: 0 },
-        zoom: 1
-      })
     }
   </script>
 </body>
