@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>路线街景</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    #pano { width: 100vw; height: 100vh; background: #000; }
+    #tip {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      color: #fff; background: rgba(0,0,0,0.7); padding: 14px 22px;
+      border-radius: 22px; font-size: 14px; z-index: 999; display: none;
+      max-width: 80%; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="pano"></div>
+  <div id="tip"></div>
+  <script>
+    // 从 URL 取参：?key=xxx&lat=xx&lng=xx
+    function qs(name) {
+      var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
+      return m ? decodeURIComponent(m[1]) : ''
+    }
+    var KEY = qs('key')
+    var lat = parseFloat(qs('lat'))
+    var lng = parseFloat(qs('lng'))
+    var tip = document.getElementById('tip')
+    function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
+    function hideTip() { tip.style.display = 'none' }
+
+    if (!KEY || isNaN(lat) || isNaN(lng)) {
+      showTip('参数缺失：key/lat/lng')
+    } else {
+      // 加载腾讯地图 JS API v2（含 Panorama）
+      var s = document.createElement('script')
+      s.src = 'https://map.qq.com/api/js?v=2.exp&libraries=service&key=' + encodeURIComponent(KEY)
+      s.onerror = function () { showTip('地图脚本加载失败，请检查 key 与业务域名') }
+      s.onload = function () {
+        try {
+          var panoService = new qq.maps.PanoramaService()
+          panoService.getPano({ lat: lat, lng: lng }, 200, function (result) {
+            if (result && result.detail && result.detail.svid) {
+              renderPano(result.detail.svid)
+            } else {
+              showTip('该位置附近暂无街景数据')
+            }
+          })
+        } catch (e) {
+          showTip('街景初始化失败：' + e.message)
+        }
+      }
+      document.body.appendChild(s)
+    }
+
+    function renderPano(svid) {
+      hideTip()
+      new qq.maps.Panorama(document.getElementById('pano'), {
+        pano: svid,
+        pov: { heading: 0, pitch: 0 },
+        zoom: 1
+      })
+    }
+
+    // 接收小程序 postMessage 切换坐标
+    window.addEventListener('message', function (e) {
+      // 仅在 web-view onMessage 触发，这里留个口子
+    })
+  </script>
+</body>
+</html>
