@@ -5,34 +5,96 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <title>路线街景</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
     #map { position: absolute; left: -9999px; width: 1px; height: 1px; visibility: hidden; }
+    #pano-frame {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      border: none;
+    }
+
     #tip {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-      color: #fff; background: rgba(0,0,0,0.7); padding: 14px 22px;
-      border-radius: 22px; font-size: 14px; max-width: 80%; text-align: center;
+      color: #fff; background: rgba(0,0,0,0.75); padding: 14px 22px;
+      border-radius: 22px; font-size: 14px; z-index: 999; display: none;
+      max-width: 80%; text-align: center;
     }
+
+    /* 顶部条 */
+    .topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: linear-gradient(180deg, rgba(7,193,96,0.95), rgba(7,193,96,0.85));
+      padding: 12px 16px;
+      color: #fff;
+      display: flex; align-items: center; justify-content: space-between;
+      font-weight: bold;
+    }
+    .topbar .progress {
+      flex: 1; margin: 0 12px;
+      height: 6px; background: rgba(255,255,255,0.3); border-radius: 3px; overflow: hidden;
+    }
+    .topbar .progress .fill {
+      height: 100%; background: #fff; border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .topbar .count { font-size: 14px; min-width: 70px; text-align: right; }
+
+    /* 底部按钮 */
+    .controls {
+      position: fixed; bottom: 30px; left: 0; right: 0; z-index: 100;
+      display: flex; justify-content: center; gap: 30px;
+      pointer-events: none;
+    }
+    .btn {
+      pointer-events: auto;
+      width: 70px; height: 70px; border-radius: 50%;
+      background: rgba(255,255,255,0.95);
+      color: #07c160;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      font-weight: bold;
+      cursor: pointer; user-select: none;
+      transition: transform 0.15s;
+    }
+    .btn .arrow { font-size: 34px; line-height: 1; }
+    .btn .label { font-size: 11px; margin-top: 2px; }
+    .btn.primary {
+      background: #07c160; color: #fff;
+      width: 84px; height: 84px;
+    }
+    .btn.primary .arrow { font-size: 40px; }
+    .btn:active { transform: scale(0.92); }
+    .btn.disabled { opacity: 0.35; pointer-events: none; }
   </style>
 
-  <!-- 取 URL 参数（要在加载腾讯 JS 之前完成，因为脚本里要拼 key） -->
   <script>
     function qs(name) {
       var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
       return m ? decodeURIComponent(m[1]) : ''
     }
+
+    // points: 用 "lat1,lng1;lat2,lng2;..." 紧凑传入
+    var ptsRaw = qs('points')
+    var points = []
+    if (ptsRaw) {
+      var arr = ptsRaw.split(';')
+      for (var i = 0; i < arr.length; i++) {
+        var ll = arr[i].split(',')
+        if (ll.length === 2) {
+          var lat = parseFloat(ll[0]), lng = parseFloat(ll[1])
+          if (!isNaN(lat) && !isNaN(lng)) points.push({ lat: lat, lng: lng })
+        }
+      }
+    }
+
     window._params = {
-      KEY:     qs('key'),
-      lat:     parseFloat(qs('lat')),
-      lng:     parseFloat(qs('lng')),
-      pano:    qs('pano'),
-      heading: qs('heading') || '0',
-      pitch:   qs('pitch')   || '0',
-      radius:  parseInt(qs('radius') || '1000', 10)
+      KEY: qs('key'),
+      points: points,
+      radius: parseInt(qs('radius') || '2000', 10)
     }
   </script>
 
-  <!-- 同步加载腾讯 JS API：用 document.write 拼 src，避免异步 -->
   <script>
+    // 同步加载腾讯 JS API
     var p = window._params
     if (p.KEY) {
       document.write(
@@ -43,67 +105,111 @@
   </script>
 </head>
 <body>
+  <iframe id="pano-frame"></iframe>
+  <div id="tip"></div>
+
+  <div class="topbar">
+    <span style="min-width:60px">街景</span>
+    <div class="progress"><div class="fill" id="progress-fill"></div></div>
+    <span class="count" id="count-label">0 / 0</span>
+  </div>
+
+  <div class="controls">
+    <div class="btn" id="btn-prev" onclick="goPrev()">
+      <span class="arrow">‹</span><span class="label">后退</span>
+    </div>
+    <div class="btn primary" id="btn-next" onclick="goNext()">
+      <span class="arrow">›</span><span class="label">前进</span>
+    </div>
+  </div>
+
   <div id="map"></div>
-  <div id="tip">街景查找中…</div>
 
   <script>
     var p = window._params
     var tip = document.getElementById('tip')
-    function showTip(t) { tip.innerText = t }
+    var frame = document.getElementById('pano-frame')
+    var fill = document.getElementById('progress-fill')
+    var count = document.getElementById('count-label')
+    var btnPrev = document.getElementById('btn-prev')
+    var btnNext = document.getElementById('btn-next')
+    var idx = 0
 
-    function gotoStreetView(pano) {
-      var url = 'https://apis.map.qq.com/uri/v1/streetview' +
-        '?pano=' + encodeURIComponent(pano) +
-        '&heading=' + encodeURIComponent(p.heading) +
-        '&pitch=' + encodeURIComponent(p.pitch) +
-        '&zoom=1' +
-        '&referer=' + encodeURIComponent(p.KEY || 'ARRoadMap')
-      location.replace(url)
+    function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
+    function hideTip() { tip.style.display = 'none' }
+
+    function updateProgress() {
+      count.innerText = (idx + 1) + ' / ' + p.points.length
+      fill.style.width = ((idx + 1) / p.points.length * 100) + '%'
+      btnPrev.classList.toggle('disabled', idx <= 0)
+      btnNext.classList.toggle('disabled', idx >= p.points.length - 1)
     }
 
-    function runWhenReady() {
+    function bearingTo(i) {
+      if (i >= p.points.length - 1) return 0
+      var a = p.points[i], b = p.points[i + 1]
+      var toRad = function (d) { return d * Math.PI / 180 }
+      var dLng = toRad(b.lng - a.lng)
+      var y = Math.sin(dLng) * Math.cos(toRad(b.lat))
+      var x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+        Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(dLng)
+      return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360)
+    }
+
+    function loadAt(i) {
+      if (i < 0 || i >= p.points.length) return
+      idx = i
+      updateProgress()
+      showTip('街景查找中…')
+      var pt = p.points[i]
+      var latLng = new qq.maps.LatLng(pt.lat, pt.lng)
+      var svc = new qq.maps.PanoramaService()
+      svc.getPano(latLng, p.radius, function (result) {
+        var svid = result && (result.svid || (result.detail && result.detail.svid))
+        if (svid) {
+          hideTip()
+          var heading = bearingTo(i)
+          frame.src = 'https://apis.map.qq.com/uri/v1/streetview' +
+            '?pano=' + encodeURIComponent(svid) +
+            '&heading=' + heading +
+            '&pitch=0&zoom=1' +
+            '&referer=' + encodeURIComponent(p.KEY || 'ARRoadMap')
+        } else {
+          showTip('该位置 ' + p.radius + 'm 范围内暂无街景')
+        }
+      })
+    }
+
+    function goPrev() { if (idx > 0) loadAt(idx - 1) }
+    function goNext() { if (idx < p.points.length - 1) loadAt(idx + 1) }
+    window.goPrev = goPrev
+    window.goNext = goNext
+
+    function start() {
       if (!window.qq || !qq.maps) {
-        // 等一会再判断（最多 30 次 × 100ms = 3s）
-        if (runWhenReady._n === undefined) runWhenReady._n = 0
-        if (runWhenReady._n++ > 30) {
+        if (start._n === undefined) start._n = 0
+        if (start._n++ > 30) {
           showTip('地图脚本加载失败：key 可能未启用 JavaScript API')
           return
         }
-        return setTimeout(runWhenReady, 100)
+        return setTimeout(start, 100)
       }
       if (typeof qq.maps.PanoramaService !== 'function') {
-        showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2 经典版）')
+        showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2）')
         return
       }
-      try {
-        var latLng = new qq.maps.LatLng(p.lat, p.lng)
-        var svc = new qq.maps.PanoramaService()
-        svc.getPano(latLng, p.radius, function (result) {
-          var svid = result && (result.svid || (result.detail && result.detail.svid))
-          if (svid) {
-            gotoStreetView(svid)
-          } else {
-            showTip('该位置 ' + p.radius + 'm 范围内暂无街景')
-          }
-        })
-      } catch (e) {
-        showTip('街景查找异常：' + e.message)
+      if (!p.points.length) {
+        showTip('未传入路径点')
+        return
       }
+      updateProgress()
+      loadAt(0)
     }
 
-    // 直接传了 pano 就跳过查找
-    if (p.pano) {
-      showTip('正在打开街景…')
-      gotoStreetView(p.pano)
-    } else if (!p.KEY || isNaN(p.lat) || isNaN(p.lng)) {
-      showTip('参数缺失：需要 key + lat + lng，或者 pano')
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      start()
     } else {
-      // 等腾讯 JS 加载完
-      if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        runWhenReady()
-      } else {
-        document.addEventListener('DOMContentLoaded', runWhenReady)
-      }
+      document.addEventListener('DOMContentLoaded', start)
     }
   </script>
 </body>
