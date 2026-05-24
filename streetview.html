@@ -19,7 +19,6 @@
   <div id="pano"></div>
   <div id="tip"></div>
   <script>
-    // 从 URL 取参：?key=xxx&lat=xx&lng=xx
     function qs(name) {
       var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
       return m ? decodeURIComponent(m[1]) : ''
@@ -34,14 +33,23 @@
     if (!KEY || isNaN(lat) || isNaN(lng)) {
       showTip('参数缺失：key/lat/lng')
     } else {
-      // 加载腾讯地图 JS API v2（含 Panorama）
+      // 腾讯地图 JS API v2，不要加 libraries=service
       var s = document.createElement('script')
-      s.src = 'https://map.qq.com/api/js?v=2.exp&libraries=service&key=' + encodeURIComponent(KEY)
-      s.onerror = function () { showTip('地图脚本加载失败，请检查 key 与业务域名') }
+      s.src = 'https://map.qq.com/api/js?v=2.exp&key=' + encodeURIComponent(KEY)
+      s.onerror = function () { showTip('地图脚本加载失败') }
       s.onload = function () {
+        if (!window.qq || !qq.maps) {
+          showTip('qq.maps 未加载（key 或 referer 配置可能有问题）')
+          return
+        }
+        if (typeof qq.maps.PanoramaService !== 'function') {
+          showTip('PanoramaService 不可用：当前 key 未启用「JavaScript API（v2）」街景能力')
+          return
+        }
         try {
+          var latLng = new qq.maps.LatLng(lat, lng)
           var panoService = new qq.maps.PanoramaService()
-          panoService.getPano({ lat: lat, lng: lng }, 200, function (result) {
+          panoService.getPano(latLng, function (result) {
             if (result && result.detail && result.detail.svid) {
               renderPano(result.detail.svid)
             } else {
@@ -63,11 +71,6 @@
         zoom: 1
       })
     }
-
-    // 接收小程序 postMessage 切换坐标
-    window.addEventListener('message', function (e) {
-      // 仅在 web-view onMessage 触发，这里留个口子
-    })
   </script>
 </body>
 </html>
