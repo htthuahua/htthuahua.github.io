@@ -58,7 +58,6 @@
       overflow: hidden;
     }
 
-    /* 缩放角手柄（左下角拖动） */
     .resize-handle {
       position: absolute;
       bottom: -6px; left: -6px;
@@ -73,7 +72,6 @@
       user-select: none;
     }
 
-    /* 地图缩放按钮组 */
     .map-zoom {
       position: absolute;
       right: 4px; bottom: 4px;
@@ -93,7 +91,6 @@
     }
     .map-zoom .zb:active { transform: scale(0.92); }
 
-    /* 当前位置标记（带朝向小三角） */
     .me-marker {
       width: 38px; height: 38px;
       position: relative;
@@ -122,7 +119,6 @@
       box-shadow: 0 2px 5px rgba(0,0,0,0.5);
     }
 
-    /* 底部按钮 */
     .controls {
       position: fixed; bottom: 30px; left: 0; right: 0; z-index: 100;
       display: flex; justify-content: center; gap: 30px;
@@ -151,6 +147,19 @@
   </style>
 
   <script>
+    /* ★★★ 在最早期屏蔽 history.pushState，防止 iframe 内的腾讯街景累积 history
+       导致小程序 web-view 返回时只能逐帧后退、无法一次回到上一页 ★★★ */
+    (function () {
+      try {
+        history.pushState = function () {
+          return history.replaceState.apply(history, arguments)
+        }
+        window.addEventListener('popstate', function () {
+          history.replaceState(null, '', location.href)
+        })
+      } catch (e) {}
+    })()
+
     function qs(name) {
       var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
       return m ? decodeURIComponent(m[1]) : ''
@@ -260,7 +269,6 @@
       return bearingFromTo(p.points[i], p.points[i + 1])
     }
 
-    // 自定义 HTML 标记
     function createMeMarker() {
       var div = document.createElement('div')
       div.className = 'me-marker'
@@ -288,7 +296,6 @@
         map: miniMap
       })
 
-      // 用自定义 HTML 标记需要 OverlayView
       meMarkerEl = createMeMarker()
       var Overlay = function (pos) { this.pos = pos; this.div = null }
       Overlay.prototype = new qq.maps.Overlay()
@@ -317,14 +324,12 @@
       meOverlay.setMap(miniMap)
       miniMarker = meOverlay
 
-      // 适配整条路径
       try {
         var bounds = new qq.maps.LatLngBounds()
         path.forEach(function (pt) { bounds.extend(pt) })
         miniMap.fitBounds(bounds, { top: 12, bottom: 12, left: 12, right: 12 })
       } catch (e) {}
 
-      // 缩放按钮
       zoomInBtn.addEventListener('click', function () {
         miniMap.setZoom(miniMap.getZoom() + 1)
       })
@@ -338,11 +343,21 @@
       var pt = p.points[idx]
       var ll = new qq.maps.LatLng(pt.lat, pt.lng)
       miniMarker.setPosition(ll)
-      // 朝向：旋转 me-cone
       var heading = bearingTo(idx)
       if (meMarkerEl) {
         var cone = meMarkerEl.querySelector('.me-cone')
         if (cone) cone.style.transform = 'rotate(' + heading + 'deg)'
+      }
+    }
+
+    /* ★★★ 关键修复：用 iframe.location.replace 而不是赋值 src，
+       这样 iframe 不会往父 window 累积 history。 ★★★ */
+    function setFrameSrc(url) {
+      try {
+        frame.contentWindow.location.replace(url)
+      } catch (e) {
+        // 跨域不让访问 contentWindow.location，回退到改 src（这会留 history）
+        frame.src = url
       }
     }
 
@@ -360,11 +375,12 @@
         if (svid) {
           hideTip()
           var heading = bearingTo(i)
-          frame.src = 'https://apis.map.qq.com/uri/v1/streetview' +
+          var url = 'https://apis.map.qq.com/uri/v1/streetview' +
             '?pano=' + encodeURIComponent(svid) +
             '&heading=' + heading +
             '&pitch=0&zoom=1' +
             '&referer=' + encodeURIComponent(p.KEY || 'ARRoadMap')
+          setFrameSrc(url)
         } else {
           showTip('该位置 ' + p.radius + 'm 范围内暂无街景')
         }
@@ -376,22 +392,20 @@
     window.goPrev = goPrev
     window.goNext = goNext
 
-    // ============ 拖拽缩放小地图框 ============
+    // 拖拽缩放小地图框
     var resizing = false
-    var startX = 0, startY = 0, startW = 0, startH = 0, startRight = 0
+    var startX = 0, startY = 0, startW = 0, startH = 0
     function getEvtXY(e) {
       if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY }
       return { x: e.clientX, y: e.clientY }
     }
     function onResizeStart(e) {
-      e.preventDefault()
-      e.stopPropagation()
+      e.preventDefault(); e.stopPropagation()
       resizing = true
       var c = getEvtXY(e)
       startX = c.x; startY = c.y
       var rect = miniWrap.getBoundingClientRect()
       startW = rect.width; startH = rect.height
-      startRight = window.innerWidth - rect.right
       document.addEventListener('mousemove', onResizeMove)
       document.addEventListener('mouseup', onResizeEnd)
       document.addEventListener('touchmove', onResizeMove, { passive: false })
@@ -403,12 +417,10 @@
       var c = getEvtXY(e)
       var dx = c.x - startX
       var dy = c.y - startY
-      // 左下角手柄：往左拖变大，往下拖变大
       var newW = Math.max(100, Math.min(window.innerWidth * 0.9, startW - dx))
       var newH = Math.max(100, Math.min(window.innerHeight * 0.7, startH + dy))
       miniWrap.style.width = newW + 'px'
       miniWrap.style.height = newH + 'px'
-      // 触发地图 resize
       if (miniMap && qq.maps.event) {
         qq.maps.event.trigger(miniMap, 'resize')
       }
