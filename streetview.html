@@ -12,71 +12,98 @@
       color: #fff; background: rgba(0,0,0,0.7); padding: 14px 22px;
       border-radius: 22px; font-size: 14px; max-width: 80%; text-align: center;
     }
-    a { color: #4FC3F7; }
   </style>
+
+  <!-- 取 URL 参数（要在加载腾讯 JS 之前完成，因为脚本里要拼 key） -->
+  <script>
+    function qs(name) {
+      var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
+      return m ? decodeURIComponent(m[1]) : ''
+    }
+    window._params = {
+      KEY:     qs('key'),
+      lat:     parseFloat(qs('lat')),
+      lng:     parseFloat(qs('lng')),
+      pano:    qs('pano'),
+      heading: qs('heading') || '0',
+      pitch:   qs('pitch')   || '0',
+      radius:  parseInt(qs('radius') || '1000', 10)
+    }
+  </script>
+
+  <!-- 同步加载腾讯 JS API：用 document.write 拼 src，避免异步 -->
+  <script>
+    var p = window._params
+    if (p.KEY) {
+      document.write(
+        '<scr' + 'ipt src="https://map.qq.com/api/js?v=2.exp&key=' +
+        encodeURIComponent(p.KEY) + '"></scr' + 'ipt>'
+      )
+    }
+  </script>
 </head>
 <body>
   <div id="map"></div>
   <div id="tip">街景查找中…</div>
 
   <script>
-    function qs(name) {
-      var m = location.search.match(new RegExp('[?&]' + name + '=([^&]+)'))
-      return m ? decodeURIComponent(m[1]) : ''
-    }
-    var KEY     = qs('key')
-    var lat     = parseFloat(qs('lat'))
-    var lng     = parseFloat(qs('lng'))
-    var pano    = qs('pano')          // 也允许直接传 pano
-    var heading = qs('heading') || '0'
-    var pitch   = qs('pitch')   || '0'
-    var radius  = parseInt(qs('radius') || '1000', 10)
-
+    var p = window._params
     var tip = document.getElementById('tip')
     function showTip(t) { tip.innerText = t }
 
     function gotoStreetView(pano) {
       var url = 'https://apis.map.qq.com/uri/v1/streetview' +
         '?pano=' + encodeURIComponent(pano) +
-        '&heading=' + encodeURIComponent(heading) +
-        '&pitch=' + encodeURIComponent(pitch) +
+        '&heading=' + encodeURIComponent(p.heading) +
+        '&pitch=' + encodeURIComponent(p.pitch) +
         '&zoom=1' +
-        '&referer=' + encodeURIComponent(KEY || 'ARRoadMap')
+        '&referer=' + encodeURIComponent(p.KEY || 'ARRoadMap')
       location.replace(url)
     }
 
-    // 如果用户直接传了 pano，跳过查找
-    if (pano) {
-      showTip('正在打开街景…')
-      gotoStreetView(pano)
-    } else if (!KEY || isNaN(lat) || isNaN(lng)) {
-      showTip('参数缺失：需要 key + lat + lng，或者 pano')
-    } else {
-      var s = document.createElement('script')
-      s.src = 'https://map.qq.com/api/js?v=2.exp&key=' + encodeURIComponent(KEY)
-      s.onerror = function () { showTip('地图脚本加载失败') }
-      s.onload = function () {
-        if (!window.qq || !qq.maps || typeof qq.maps.PanoramaService !== 'function') {
-          showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2）')
+    function runWhenReady() {
+      if (!window.qq || !qq.maps) {
+        // 等一会再判断（最多 30 次 × 100ms = 3s）
+        if (runWhenReady._n === undefined) runWhenReady._n = 0
+        if (runWhenReady._n++ > 30) {
+          showTip('地图脚本加载失败：key 可能未启用 JavaScript API')
           return
         }
-        try {
-          var latLng = new qq.maps.LatLng(lat, lng)
-          var svc = new qq.maps.PanoramaService()
-          svc.getPano(latLng, radius, function (result) {
-            if (result && result.svid) {
-              gotoStreetView(result.svid)
-            } else if (result && result.detail && result.detail.svid) {
-              gotoStreetView(result.detail.svid)
-            } else {
-              showTip('该位置 ' + radius + 'm 范围内暂无街景')
-            }
-          })
-        } catch (e) {
-          showTip('街景查找异常：' + e.message)
-        }
+        return setTimeout(runWhenReady, 100)
       }
-      document.body.appendChild(s)
+      if (typeof qq.maps.PanoramaService !== 'function') {
+        showTip('PanoramaService 不可用：当前 key 未启用 JavaScript API（v2 经典版）')
+        return
+      }
+      try {
+        var latLng = new qq.maps.LatLng(p.lat, p.lng)
+        var svc = new qq.maps.PanoramaService()
+        svc.getPano(latLng, p.radius, function (result) {
+          var svid = result && (result.svid || (result.detail && result.detail.svid))
+          if (svid) {
+            gotoStreetView(svid)
+          } else {
+            showTip('该位置 ' + p.radius + 'm 范围内暂无街景')
+          }
+        })
+      } catch (e) {
+        showTip('街景查找异常：' + e.message)
+      }
+    }
+
+    // 直接传了 pano 就跳过查找
+    if (p.pano) {
+      showTip('正在打开街景…')
+      gotoStreetView(p.pano)
+    } else if (!p.KEY || isNaN(p.lat) || isNaN(p.lng)) {
+      showTip('参数缺失：需要 key + lat + lng，或者 pano')
+    } else {
+      // 等腾讯 JS 加载完
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        runWhenReady()
+      } else {
+        document.addEventListener('DOMContentLoaded', runWhenReady)
+      }
     }
   </script>
 </body>
