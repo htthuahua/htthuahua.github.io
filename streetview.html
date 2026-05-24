@@ -38,17 +38,88 @@
     }
     .topbar .count { font-size: 13px; min-width: 60px; text-align: right; }
 
-    /* 右上角小地图 */
-    #mini-map {
+    /* 右上角小地图（容器，可拖拽缩放） */
+    #mini-wrap {
       position: fixed;
       top: 56px; right: 12px;
-      width: 130px; height: 130px;
+      width: 150px; height: 150px;
+      min-width: 100px; min-height: 100px;
+      max-width: 90vw; max-height: 70vh;
       border-radius: 12px;
-      overflow: hidden;
+      overflow: visible;
       z-index: 90;
       border: 2px solid rgba(255,255,255,0.85);
       box-shadow: 0 4px 12px rgba(0,0,0,0.5);
       background: #eee;
+    }
+    #mini-map {
+      width: 100%; height: 100%;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    /* 缩放角手柄（左下角拖动） */
+    .resize-handle {
+      position: absolute;
+      bottom: -6px; left: -6px;
+      width: 22px; height: 22px;
+      background: rgba(7,193,96,0.95);
+      border-radius: 50%;
+      cursor: nwse-resize;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      z-index: 5;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 14px; font-weight: bold;
+      user-select: none;
+    }
+
+    /* 地图缩放按钮组 */
+    .map-zoom {
+      position: absolute;
+      right: 4px; bottom: 4px;
+      display: flex; flex-direction: column; gap: 4px;
+      z-index: 4;
+    }
+    .map-zoom .zb {
+      width: 26px; height: 26px;
+      background: rgba(255,255,255,0.95);
+      color: #07c160;
+      border-radius: 50%;
+      font-size: 18px; font-weight: bold;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      cursor: pointer; user-select: none;
+      line-height: 1;
+    }
+    .map-zoom .zb:active { transform: scale(0.92); }
+
+    /* 当前位置标记（带朝向小三角） */
+    .me-marker {
+      width: 38px; height: 38px;
+      position: relative;
+      transform: translate(-50%, -50%);
+    }
+    .me-marker .me-cone {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform-origin: center bottom;
+      width: 0; height: 0;
+      border-left: 12px solid transparent;
+      border-right: 12px solid transparent;
+      border-bottom: 22px solid rgba(7,193,96,0.55);
+      margin-left: -12px;
+      margin-top: -22px;
+      pointer-events: none;
+    }
+    .me-marker .me-dot {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 16px; height: 16px;
+      background: #07c160;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
     }
 
     /* 底部按钮 */
@@ -125,7 +196,14 @@
     <span class="count" id="count-label">0 / 0</span>
   </div>
 
-  <div id="mini-map"></div>
+  <div id="mini-wrap">
+    <div id="mini-map"></div>
+    <div class="map-zoom">
+      <div class="zb" id="zoom-in">+</div>
+      <div class="zb" id="zoom-out">−</div>
+    </div>
+    <div class="resize-handle" id="resize-handle">⤡</div>
+  </div>
 
   <div class="controls">
     <div class="btn" id="btn-prev" onclick="goPrev()">
@@ -144,11 +222,17 @@
     var count = document.getElementById('count-label')
     var btnPrev = document.getElementById('btn-prev')
     var btnNext = document.getElementById('btn-next')
-    var idx = 0
+    var miniWrap = document.getElementById('mini-wrap')
+    var miniMapEl = document.getElementById('mini-map')
+    var zoomInBtn = document.getElementById('zoom-in')
+    var zoomOutBtn = document.getElementById('zoom-out')
+    var resizeHandle = document.getElementById('resize-handle')
 
+    var idx = 0
     var miniMap = null
     var miniMarker = null
     var miniPolyline = null
+    var meMarkerEl = null
 
     function showTip(t) { tip.innerText = t; tip.style.display = 'block' }
     function hideTip() { tip.style.display = 'none' }
@@ -160,15 +244,6 @@
       btnNext.classList.toggle('disabled', idx >= p.points.length - 1)
     }
 
-    function bearingTo(i) {
-      if (i >= p.points.length - 1) {
-        if (i <= 0) return 0
-        // 终点用最后一段方向
-        return bearingFromTo(p.points[i - 1], p.points[i])
-      }
-      return bearingFromTo(p.points[i], p.points[i + 1])
-    }
-
     function bearingFromTo(a, b) {
       var toRad = function (d) { return d * Math.PI / 180 }
       var dLng = toRad(b.lng - a.lng)
@@ -177,20 +252,34 @@
         Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(dLng)
       return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360)
     }
+    function bearingTo(i) {
+      if (p.points.length < 2) return 0
+      if (i >= p.points.length - 1) {
+        return bearingFromTo(p.points[i - 1], p.points[i])
+      }
+      return bearingFromTo(p.points[i], p.points[i + 1])
+    }
+
+    // 自定义 HTML 标记
+    function createMeMarker() {
+      var div = document.createElement('div')
+      div.className = 'me-marker'
+      div.innerHTML = '<div class="me-cone"></div><div class="me-dot"></div>'
+      return div
+    }
 
     function initMiniMap() {
       var center = new qq.maps.LatLng(p.points[0].lat, p.points[0].lng)
-      miniMap = new qq.maps.Map(document.getElementById('mini-map'), {
+      miniMap = new qq.maps.Map(miniMapEl, {
         center: center,
         zoom: 15,
         disableDefaultUI: true,
-        draggable: false,
-        zoomable: false,
-        scrollwheel: false,
+        draggable: true,
+        zoomable: true,
+        scrollwheel: true,
         keyboardShortcuts: false
       })
 
-      // 路径
       var path = p.points.map(function (pt) { return new qq.maps.LatLng(pt.lat, pt.lng) })
       miniPolyline = new qq.maps.Polyline({
         path: path,
@@ -199,18 +288,49 @@
         map: miniMap
       })
 
-      // 当前位置 marker
-      miniMarker = new qq.maps.Marker({
-        position: center,
-        map: miniMap
-      })
+      // 用自定义 HTML 标记需要 OverlayView
+      meMarkerEl = createMeMarker()
+      var Overlay = function (pos) { this.pos = pos; this.div = null }
+      Overlay.prototype = new qq.maps.Overlay()
+      Overlay.prototype.construct = function () {
+        this.div = meMarkerEl
+        this.div.style.position = 'absolute'
+        this.div.style.zIndex = '999'
+        var panes = this.getPanes()
+        if (panes && panes.overlayLayer) panes.overlayLayer.appendChild(this.div)
+        else this.getMap().getDiv().appendChild(this.div)
+      }
+      Overlay.prototype.draw = function () {
+        if (!this.div) return
+        var proj = this.getProjection()
+        if (!proj) return
+        var px = proj.fromLatLngToDivPixel(this.pos)
+        if (!px) return
+        this.div.style.left = px.x + 'px'
+        this.div.style.top = px.y + 'px'
+      }
+      Overlay.prototype.setPosition = function (pos) {
+        this.pos = pos
+        this.draw()
+      }
+      var meOverlay = new Overlay(center)
+      meOverlay.setMap(miniMap)
+      miniMarker = meOverlay
 
       // 适配整条路径
       try {
         var bounds = new qq.maps.LatLngBounds()
         path.forEach(function (pt) { bounds.extend(pt) })
-        miniMap.fitBounds(bounds, { top: 10, bottom: 10, left: 10, right: 10 })
+        miniMap.fitBounds(bounds, { top: 12, bottom: 12, left: 12, right: 12 })
       } catch (e) {}
+
+      // 缩放按钮
+      zoomInBtn.addEventListener('click', function () {
+        miniMap.setZoom(miniMap.getZoom() + 1)
+      })
+      zoomOutBtn.addEventListener('click', function () {
+        miniMap.setZoom(Math.max(3, miniMap.getZoom() - 1))
+      })
     }
 
     function updateMiniMap() {
@@ -218,8 +338,12 @@
       var pt = p.points[idx]
       var ll = new qq.maps.LatLng(pt.lat, pt.lng)
       miniMarker.setPosition(ll)
-      // 让 marker 始终居中（注释掉，用户能看到整条路；如需跟随取消注释）
-      // miniMap.panTo(ll)
+      // 朝向：旋转 me-cone
+      var heading = bearingTo(idx)
+      if (meMarkerEl) {
+        var cone = meMarkerEl.querySelector('.me-cone')
+        if (cone) cone.style.transform = 'rotate(' + heading + 'deg)'
+      }
     }
 
     function loadAt(i) {
@@ -251,6 +375,53 @@
     function goNext() { if (idx < p.points.length - 1) loadAt(idx + 1) }
     window.goPrev = goPrev
     window.goNext = goNext
+
+    // ============ 拖拽缩放小地图框 ============
+    var resizing = false
+    var startX = 0, startY = 0, startW = 0, startH = 0, startRight = 0
+    function getEvtXY(e) {
+      if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY }
+      return { x: e.clientX, y: e.clientY }
+    }
+    function onResizeStart(e) {
+      e.preventDefault()
+      e.stopPropagation()
+      resizing = true
+      var c = getEvtXY(e)
+      startX = c.x; startY = c.y
+      var rect = miniWrap.getBoundingClientRect()
+      startW = rect.width; startH = rect.height
+      startRight = window.innerWidth - rect.right
+      document.addEventListener('mousemove', onResizeMove)
+      document.addEventListener('mouseup', onResizeEnd)
+      document.addEventListener('touchmove', onResizeMove, { passive: false })
+      document.addEventListener('touchend', onResizeEnd)
+    }
+    function onResizeMove(e) {
+      if (!resizing) return
+      e.preventDefault()
+      var c = getEvtXY(e)
+      var dx = c.x - startX
+      var dy = c.y - startY
+      // 左下角手柄：往左拖变大，往下拖变大
+      var newW = Math.max(100, Math.min(window.innerWidth * 0.9, startW - dx))
+      var newH = Math.max(100, Math.min(window.innerHeight * 0.7, startH + dy))
+      miniWrap.style.width = newW + 'px'
+      miniWrap.style.height = newH + 'px'
+      // 触发地图 resize
+      if (miniMap && qq.maps.event) {
+        qq.maps.event.trigger(miniMap, 'resize')
+      }
+    }
+    function onResizeEnd() {
+      resizing = false
+      document.removeEventListener('mousemove', onResizeMove)
+      document.removeEventListener('mouseup', onResizeEnd)
+      document.removeEventListener('touchmove', onResizeMove)
+      document.removeEventListener('touchend', onResizeEnd)
+    }
+    resizeHandle.addEventListener('mousedown', onResizeStart)
+    resizeHandle.addEventListener('touchstart', onResizeStart, { passive: false })
 
     function start() {
       if (!window.qq || !qq.maps) {
